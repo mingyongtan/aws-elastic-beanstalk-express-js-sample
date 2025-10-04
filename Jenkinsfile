@@ -1,24 +1,20 @@
 pipeline {
     agent {
         docker {
-            image 'node:16'              // Use Node.js 16 as build agent
-            args '-u root:root'          // Run as root so we can install tools if needed
+            image 'node:16'
+            args '-u root:root'
         }
     }
 
     environment {
-        REGISTRY    = "docker.io"                        // Docker Hub registry
-        APP_NAME    = "aws-express-sample"               // Change if needed
-        IMAGE_NAME  = "mingyongtan/${APP_NAME}"          // Replace with your Docker Hub username
-        IMAGE_TAG   = "latest"                           // Could also be "${BUILD_NUMBER}" or "${GIT_COMMIT}"
-        DOCKER_USER = credentials('docker-username')     // Jenkins credential ID
-        DOCKER_PASS = credentials('docker-password')     // Jenkins credential ID
+        DOCKERHUB_CREDENTIALS = credentials('dockerhub-creds')
+        DOCKER_IMAGE = "21920794/aws-express-app"
     }
 
     stages {
         stage('Checkout') {
             steps {
-                checkout scm   // Pulls code from your forked GitHub repo
+                checkout scm
             }
         }
 
@@ -28,34 +24,69 @@ pipeline {
             }
         }
 
-        stage('Run Unit Tests') {
+        stage('Run Tests') {
             steps {
-                sh 'npm test || echo "⚠️ No tests defined"'
+                sh 'npm test || echo "No tests configured"'
+            }
+        }
+
+        stage('Dependency Scan - OWASP') {
+            agent {
+                docker {
+                    image 'owasp/dependency-check:latest'
+                    args '-v $PWD:/src'
+                }
+            }
+            steps {
+                sh '''
+                    echo "🔍 Running OWASP Dependency Check..."
+                    dependency-check.sh \
+                      --scan /src \
+                      --format HTML \
+                      --failOnCVSS 7 \
+                      --out /src/reports
+                '''
+            }
+            post {
+                always {
+                    echo "Saving OWASP scan report..."
+                    archiveArtifacts artifacts: 'reports/*.html', allowEmptyArchive: true
+                }
+                failure {
+                    echo "❌ Build failed due to high/critical vulnerabilities!"
+                }
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                sh """
-                  echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-                  docker build -t $IMAGE_NAME:$IMAGE_TAG .
-                """
+                script {
+                    sh """
+                    docker build -t ${DOCKER_IMAGE}:latest .
+                    """
+                }
             }
         }
 
-        stage('Push Docker Image') {
+        stage('Push to Docker Hub') {
             steps {
-                sh 'docker push $IMAGE_NAME:$IMAGE_TAG'
+                script {
+                    sh """
+                    echo ${DOCKERHUB_CREDENTIALS_PSW} | docker login -u ${DOCKERHUB_CREDENTIALS_USR} --password-stdin
+                    docker push ${DOCKER_IMAGE}:latest
+                    docker logout
+                    """
+                }
             }
         }
     }
 
     post {
         success {
-            echo "✅ Pipeline completed successfully. Image pushed: $IMAGE_NAME:$IMAGE_TAG"
+            echo '✅ Build and push successful!'
         }
         failure {
-            echo "❌ Pipeline failed. Check logs."
+            echo '❌ Build or push failed.'
         }
     }
 }
