@@ -7,9 +7,13 @@ pipeline {
     }
 
     environment {
-        DOCKERHUB_CREDENTIALS = credentials('dockerhub-creds')
-        DOCKER_IMAGE = "21920794/aws-express-app"
-    }
+	    DOCKER_HOST       = "tcp://docker:2376"
+	    DOCKER_CERT_PATH  = "/certs/client"
+	    DOCKER_TLS_VERIFY = "1"
+
+	    // For custom CLI calls (optional)
+	    DOCKER_TLS_CA     = "/certs/ca/cert.pem"
+	}
 
     stages {
         stage('Checkout') {
@@ -82,6 +86,9 @@ pipeline {
     }
 
     post {
+	always {
+	    archiveArtifacts artifacts: '**/logs/*.log', allowEmptyArchive: true
+	}
         success {
             echo '✅ Build and push successful!'
         }
