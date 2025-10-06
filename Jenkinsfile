@@ -29,27 +29,29 @@ pipeline {
     }
 
     stage('Dependency Scan (OWASP DC)') {
-	  steps {
-	    withCredentials([string(credentialsId: 'nvd-api-key', variable: 'NVD_API_KEY')]) {
-	      sh '''
-		set -eux
-		mkdir -p reports
-		docker volume create dependency-check-data >/dev/null 2>&1 || true
+  steps {
+    sh '''
+      set -eux
+      mkdir -p reports
+      # make sure the named volume exists on the remote Docker host (DinD)
+      docker volume create dependency-check-data >/dev/null 2>&1 || true
 
-		docker run --rm -u 0:0 \
-		  -e NVD_API_KEY="$NVD_API_KEY" \
-		  -v "$PWD":/src \
-		  -v dependency-check-data:/usr/share/dependency-check/data \
-		  owasp/dependency-check:latest \
-		    --scan /src \
-		    --format HTML \
-		    --out /src/reports \
-		    --failOnCVSS ${DC_FAIL_CVSS}
-	      '''
-	    }
-	  }
-	  post { always { archiveArtifacts artifacts: 'reports/*.html', fingerprint: true } }
-	}
+      docker run --rm -u 0:0 \
+        -v "$PWD":/src \
+        -v dependency-check-data:/usr/share/dependency-check/data \
+        owasp/dependency-check:latest \
+          --scan /src \
+          --format HTML \
+          --out /src/reports \
+          --failOnCVSS ${DC_FAIL_CVSS}
+    '''
+  }
+  post {
+    always {
+      archiveArtifacts artifacts: 'reports/*.html', fingerprint: true
+    }
+  }
+}
 
     stage('Docker Build & Push') {
       steps {
