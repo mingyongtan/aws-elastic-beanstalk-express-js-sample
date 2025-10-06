@@ -1,20 +1,13 @@
-// Jenkinsfile — CI/CD for Node app with security scan + Docker push
-// - Uses Node 16 docker image as build agent for install/test
-// - OWASP Dependency-Check fails build if CVSS >= 7
-// - Builds and pushes image to Docker Hub
-
 pipeline {
-  agent none
-  options { timestamps() }
+  agent any  // ✅ gives top-level context so no node errors
   environment {
-    REGISTRY   = 'docker.io'
-    IMAGE_REPO = '21920794/pipeline-compose'   // change if needed
-    DC_FAIL_CVSS = '7'                         // fail on High/Critical
+    REGISTRY    = 'docker.io'
+    IMAGE_REPO  = '21920794/pipeline-compose'
+    DC_FAIL_CVSS = '7'
   }
 
   stages {
     stage('Checkout') {
-      agent any
       steps { checkout scm }
     }
 
@@ -36,25 +29,31 @@ pipeline {
     }
 
     stage('Dependency Scan (OWASP DC)') {
-      agent any
-      steps {
-        sh '''
-          mkdir -p reports
-          docker run --rm -u 0:0 -v "$PWD":/src owasp/dependency-check:latest \
-            --scan /src \
-            --format HTML \
-            --out /src/reports \
-            --failOnCVSS ${DC_FAIL_CVSS}
-        '''
-      }
-      post { always { archiveArtifacts artifacts: 'reports/*.html', fingerprint: true } }
-    }
+	  steps {
+	    withCredentials([string(credentialsId: 'nvd-api-key', variable: 'NVD_API_KEY')]) {
+	      sh '''
+		set -eux
+		mkdir -p reports
+		docker volume create dependency-check-data >/dev/null 2>&1 || true
+
+		docker run --rm -u 0:0 \
+		  -e NVD_API_KEY="$NVD_API_KEY" \
+		  -v "$PWD":/src \
+		  -v dependency-check-data:/usr/share/dependency-check/data \
+		  owasp/dependency-check:latest \
+		    --scan /src \
+		    --format HTML \
+		    --out /src/reports \
+		    --failOnCVSS ${DC_FAIL_CVSS}
+	      '''
+	    }
+	  }
+	  post { always { archiveArtifacts artifacts: 'reports/*.html', fingerprint: true } }
+	}
 
     stage('Docker Build & Push') {
-      agent any
       steps {
         script {
-          // 🔧 Fallback Dockerfile if the repo doesn't have one
           if (!fileExists('Dockerfile')) {
             writeFile file: 'Dockerfile', text: '''
 FROM node:16-alpine
@@ -83,9 +82,16 @@ CMD ["npm","start"]
           }
         }
       }
+      post {
+        always {
+            // ⬇️ remove the numbered tag locally, keep :latest, then prune dangling layers
+	      sh """
+		docker rmi ${REGISTRY}/${IMAGE_REPO}:${BUILD_NUMBER} || true
+		docker image prune -f || true
+	      """
+        }
+      }
     }
   }
-
-  post { always { sh 'docker image prune -f || true' } }
 }
 
